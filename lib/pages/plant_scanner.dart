@@ -2,10 +2,113 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart'; // Added for compute
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
+
+// Helper class for passing data to the isolate
+class IsolateData {
+  final CameraImage cameraImage;
+  final int inputSize;
+
+  IsolateData(this.cameraImage, this.inputSize);
+}
+
+// Top-level function to be run in an isolate for image processing
+Future<List<List<List<List<double>>>>> _processImageInIsolate(IsolateData isolateData) async {
+  final cameraImage = isolateData.cameraImage;
+  final inputSize = isolateData.inputSize;
+
+  final img.Image? image = _convertYUV420ToImageStatic(cameraImage);
+  if (image == null) {
+    print('Isolate: Failed to convert camera image');
+    // Return an empty or specific error structure if needed, or let it throw.
+    // For now, let it throw, it will be caught by the caller of compute.
+    throw Exception('Isolate: Failed to convert camera image');
+  }
+
+  final resizedImage = img.copyResize(image, width: inputSize, height: inputSize);
+  
+  var imageInput = List.generate(
+    1,
+    (_) => List.generate(
+      inputSize,
+      (y) => List.generate(
+        inputSize,
+        (x) => List.filled(3, 0.0),
+      ),
+    ),
+  );
+
+  for (int y = 0; y < inputSize; y++) {
+    for (int x = 0; x < inputSize; x++) {
+      final pixel = resizedImage.getPixel(x, y);
+      // Normalize pixel values to [0, 1]
+      imageInput[0][y][x][0] = pixel.r / 255.0;
+      imageInput[0][y][x][1] = pixel.g / 255.0;
+      imageInput[0][y][x][2] = pixel.b / 255.0;
+    }
+  }
+  return imageInput;
+}
+
+// Static version of _convertYUV420ToImage for use in isolate
+// Note: CameraImage planes (Uint8List) are transferable.
+img.Image? _convertYUV420ToImageStatic(CameraImage cameraImage) {
+  try {
+    final width = cameraImage.width;
+    final height = cameraImage.height;
+
+    final yBuffer = cameraImage.planes[0].bytes;
+    final uBuffer = cameraImage.planes[1].bytes;
+    final vBuffer = cameraImage.planes[2].bytes;
+    final int yRowStride = cameraImage.planes[0].bytesPerRow;
+    final int uvRowStride = cameraImage.planes[1].bytesPerRow;
+    final int uvPixelStride = cameraImage.planes[1].bytesPerPixel ?? 1; // Handle null with a default
+
+    final image = img.Image(width: width, height: height);
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final int yIndex = y * yRowStride + x;
+        
+        final int uvx = x ~/ 2;
+        final int uvy = y ~/ 2;
+        // Calculate the U and V indices using their respective row strides and pixel strides
+        final int uIndex = uvy * uvRowStride + uvx * uvPixelStride;
+        final int vIndex = uvy * uvRowStride + uvx * uvPixelStride;
+
+        if (yIndex < yBuffer.length && uIndex < uBuffer.length && vIndex < vBuffer.length) {
+          final yValue = yBuffer[yIndex];
+          final uValue = uBuffer[uIndex];
+          final vValue = vBuffer[vIndex];
+
+          // ITU-R BT.601 YUV to RGB conversion
+          // Ensure values are doubles for calculation then clamp and round.
+          final double yVal = yValue.toDouble();
+          final double uVal = uValue.toDouble() - 128.0;
+          final double vVal = vValue.toDouble() - 128.0;
+
+          final int r = (yVal + 1.402 * vVal).round().clamp(0, 255);
+          final int g = (yVal - 0.344136 * uVal - 0.714136 * vVal).round().clamp(0, 255);
+          final int b = (yVal + 1.772 * uVal).round().clamp(0, 255);
+          
+          image.setPixelRgba(x, y, r, g, b, 255);
+        } else {
+           // If out of bounds, set to black or handle as an error
+          image.setPixelRgba(x, y, 0, 0, 0, 255);
+        }
+      }
+    }
+    return image;
+  } catch (e) {
+    print('Isolate: Error converting YUV420 to Image: $e');
+    return null;
+  }
+}
+
 
 class PlantScanner extends StatefulWidget {
   const PlantScanner({super.key});
@@ -596,7 +699,7 @@ void _fillInputTensor(img.Image image) {
                 return _buildDetectionBox(detection, constraints.biggest);
               }).toList()),
 
-              // Detection count
+              // Detection count / name
               if (_detections.isNotEmpty)
                 Positioned(
                   top: 100,
@@ -608,7 +711,10 @@ void _fillInputTensor(img.Image image) {
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
-                      '${_detections.length} tanaman terdeteksi',
+                      // Display the name of the highest confidence detection
+                      _detections.isNotEmpty
+                          ? '${_detections[0].label} terdeteksi'
+                          : '${_detections.length} tanaman terdeteksi', // Fallback, though covered by outer if
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 14,
