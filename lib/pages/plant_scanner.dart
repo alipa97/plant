@@ -21,13 +21,17 @@ class _PlantScannerState extends State<PlantScanner> {
   Interpreter? _interpreter;
   List<String> _labels = [];
   
+  // Pre-allocated input and output tensors
+  List<Object>? _inputTensors;
+  Map<int, Object>? _outputTensors;
+
   bool _isDetecting = false;
   bool _isModelLoaded = false;
   List<DetectionResult> _detections = [];
   
   // Untuk mengontrol FPS detection
   DateTime _lastDetection = DateTime.now();
-  static const int _detectionIntervalMs = 500; // Deteksi setiap 500ms
+  static const int _detectionIntervalMs = 750; // Deteksi setiap 750ms (previously 500ms)
   
   // Model configuration berdasarkan attributes
   static const int _inputSize = 320; // Ukuran input untuk object detection
@@ -82,6 +86,10 @@ class _PlantScannerState extends State<PlantScanner> {
   Future<void> _loadModelAndLabels() async {
     try {
       final modelOptions = InterpreterOptions();
+      // Try to disable GPU delegate and NNAPI to see if it resolves native crashes/nulls
+      // modelOptions.addDelegate(GpuDelegateV2()); // Example if we wanted to add GPU
+      // Not adding any delegates forces CPU execution, which is more stable for debugging.
+      
       _interpreter = await Interpreter.fromAsset(
         'assets/model.tflite',
         options: modelOptions,
@@ -113,16 +121,62 @@ class _PlantScannerState extends State<PlantScanner> {
         setState(() {
           _isModelLoaded = true;
         });
+        
+        // Pre-allocate tensors after model is loaded
+        _initializeTensors();
+
       } catch (e) {
         print('Error memuat labels: $e');
         _labels = List.generate(_numClasses, (index) => 'Plant $index');
         setState(() {
           _isModelLoaded = true;
         });
+         // Pre-allocate tensors even if labels fail, if model loaded
+        if (_interpreter != null) {
+          _initializeTensors();
+        }
       }
     } catch (e) {
       print('Gagal memuat model: $e');
     }
+  }
+
+  void _initializeTensors() {
+    if (_interpreter == null) return;
+
+    // Initialize Input Tensor (imageInput)
+    // Shape: [1, 320, 320, 3]
+    _inputTensors = [
+      List.generate(
+        1,
+        (_) => List.generate(
+          _inputSize,
+          (y) => List.generate(
+            _inputSize,
+            (x) => List.filled(3, 0.0), // Placeholder, will be filled
+          ),
+        ),
+      ),
+    ];
+    print('Input tensors pre-allocated.');
+
+    // Initialize Output Tensors
+    // Output 0 shape: [1, 10] (Scores)
+    // Output 1 shape: [1, 10, 4] (Boxes)
+    // Output 2 shape: [1] (Number of detections)
+    // Output 3 shape: [1, 10] (Classes)
+    final outputScores = List.generate(1, (_) => List.filled(_maxDetections, 0.0));
+    final outputBoxes = List.generate(1, (_) => List.generate(_maxDetections, (_) => List.filled(4, 0.0)));
+    final outputNumDetections = List.filled(1, 0.0);
+    final outputClasses = List.generate(1, (_) => List.filled(_maxDetections, 0.0));
+
+    _outputTensors = {
+      0: outputScores,
+      1: outputBoxes,
+      2: outputNumDetections,
+      3: outputClasses,
+    };
+    print('Output tensors pre-allocated.');
   }
 
   void _processCameraImage(CameraImage cameraImage) async {
@@ -150,33 +204,33 @@ class _PlantScannerState extends State<PlantScanner> {
       // Resize image untuk model object detection
       final resizedImage = img.copyResize(image, width: _inputSize, height: _inputSize);
 
-      // Prepare inputs dengan error handling
-      final inputs = _prepareInputs(resizedImage);
-      final outputs = _prepareOutputs();
+      // Fill the pre-allocated input tensor
+      _fillInputTensor(resizedImage);
 
-      print('Running inference...');
-      print('Number of inputs: ${inputs.length}');
-      print('Number of outputs: ${outputs.length}');
+      // Check if tensors are ready (they should be if _isModelLoaded is true)
+      if (_inputTensors == null || _outputTensors == null) {
+        print("Error: Tensors not initialized before inference.");
+        _isDetecting = false;
+        return;
+      }
 
-      // Run inference dengan multiple inputs
+      // print('Running inference with pre-allocated tensors...');
+      // No need to print number of inputs/outputs as they are fixed now.
+
+      // Run inference using pre-allocated tensors
       try {
-        _interpreter!.runForMultipleInputs(inputs, outputs);
+        _interpreter!.runForMultipleInputs(_inputTensors!, _outputTensors!); // Use runForMultipleInputs if _inputTensors is List<Object>
+        // If _inputTensors![0] is the actual tensor and not a list containing it:
+        // _interpreter!.run(_inputTensors![0], _outputTensors!);
         print('Inference completed successfully');
       } catch (e) {
         print('Inference error: $e');
-        // Coba dengan single input jika multiple inputs gagal
-        try {
-          print('Trying single input...');
-          _interpreter!.run(inputs[0], outputs);
-          print('Single input inference successful');
-        } catch (e2) {
-          print('Single input also failed: $e2');
-          return;
-        }
+        _isDetecting = false; // Reset detection flag
+        return; // Stop processing if inference fails
       }
 
-      // Process hasil deteksi
-      final detections = _processObjectDetectionOutput(outputs, cameraImage.width, cameraImage.height);
+      // Process hasil deteksi using the pre-allocated _outputTensors
+      final detections = _processObjectDetectionOutput(_outputTensors!, cameraImage.width, cameraImage.height);
 
       if (mounted) {
         setState(() {
@@ -227,54 +281,26 @@ class _PlantScannerState extends State<PlantScanner> {
     }
   }
 
-List<Object> _prepareInputs(img.Image image) {
+// Fills the pre-allocated _inputTensors
+void _fillInputTensor(img.Image image) {
+  if (_inputTensors == null || _inputTensors![0] == null) {
+    print("Error: Input tensors not pre-allocated for filling.");
+    return;
+  }
+
   try {
-    // Input 1: concat - Image tensor [1, 224, 224, 3]
-    final imageInput = List.generate(
-      1,
-      (_) => List.generate(
-        224,
-        (y) => List.generate(
-          224,
-          (x) {
-            final pixel = image.getPixel(x, y);
-            return [
-              pixel.r.toDouble() / 255.0,
-              pixel.g.toDouble() / 255.0,
-              pixel.b.toDouble() / 255.0,
-            ];
-          },
-        ),
-      ),
-    );
+    var imageInput = _inputTensors![0] as List<List<List<List<double>>>>;
 
-    // Input 2: convert_scores - [1, 12544, 10]
-    final scoresInput = List.generate(
-      1,
-      (_) => List.generate(
-        12544,
-        (_) => List.filled(10, 0.0),
-      ),
-    );
-
-    // Input 3: anchors - [1, 12544, 4]
-    final anchorsInput = List.generate(
-      1,
-      (_) => List.generate(
-        12544,
-        (_) => [0.5, 0.5, 0.1, 0.1],
-      ),
-    );
-
-    print('Input shapes prepared:');
-    print('Image input: ${imageInput.length}x${imageInput[0].length}x${imageInput[0][0].length}x${imageInput[0][0][0].length}');
-    print('Scores input: ${scoresInput.length}x${scoresInput[0].length}x${scoresInput[0][0].length}');
-    print('Anchors input: ${anchorsInput.length}x${anchorsInput[0].length}x${anchorsInput[0][0].length}');
-
-    return [imageInput, scoresInput, anchorsInput];
+    for (int y = 0; y < _inputSize; y++) {
+      for (int x = 0; x < _inputSize; x++) {
+        final pixel = image.getPixel(x, y);
+        imageInput[0][y][x][0] = pixel.r.toDouble() / 255.0;
+        imageInput[0][y][x][1] = pixel.g.toDouble() / 255.0;
+        imageInput[0][y][x][2] = pixel.b.toDouble() / 255.0;
+      }
+    }
   } catch (e) {
-    print('Error preparing inputs: $e');
-    rethrow;
+    print('Error filling input tensor: $e');
   }
 }
 
@@ -322,32 +348,8 @@ List<Object> _prepareInputs(img.Image image) {
     return anchors;
   }
 
-  Map<int, Object> _prepareOutputs() {
-    try {
-      // Berdasarkan model dengan 4 output:
-      // Buat output buffers yang aman
-      final output0 = List.generate(1, (_) => List.generate(_maxDetections, (_) => List.filled(4, 0.0)));
-      final output1 = List.generate(1, (_) => List.filled(_maxDetections, 0.0));
-      final output2 = List.generate(1, (_) => List.filled(_maxDetections, 0.0));
-      final output3 = List.filled(1, 0.0);
-      
-      print('Output shapes prepared:');
-      print('Output 0: ${output0.length}x${output0[0].length}x${(output0[0][0] as List).length}');
-      print('Output 1: ${output1.length}x${output1[0].length}');
-      print('Output 2: ${output2.length}x${output2[0].length}');
-      print('Output 3: ${output3.length}');
-      
-      return {
-        0: output0, // Boxes
-        1: output1, // Classes
-        2: output2, // Scores
-        3: output3, // Number of detections
-      };
-    } catch (e) {
-      print('Error preparing outputs: $e');
-      rethrow;
-    }
-  }
+  // _prepareOutputs() is removed as outputs are now pre-allocated in _initializeTensors 
+  // and stored in _outputTensors. The _outputTensors map is directly passed to interpreter.run().
 
   List<DetectionResult> _processObjectDetectionOutput(
     Map<int, Object> outputs, 
@@ -360,20 +362,21 @@ List<Object> _prepareInputs(img.Image image) {
       print('Processing outputs...');
       print('Available output keys: ${outputs.keys.toList()}');
       
-      // Safely extract outputs dengan null checking
+      // Safely extract outputs
       if (!outputs.containsKey(0) || !outputs.containsKey(1) || 
           !outputs.containsKey(2) || !outputs.containsKey(3)) {
         print('Missing required output keys');
         return results;
       }
       
-      final boxes = outputs[0] as List;
-      final classes = outputs[1] as List; 
-      final scores = outputs[2] as List;
-      final numDetections = outputs[3] as List;
+      // Based on the new output structure from _prepareOutputs
+      final scores = outputs[0] as List;
+      final boxes = outputs[1] as List;
+      final numDetections = outputs[2] as List;
+      final classes = outputs[3] as List;
       
       print('Output shapes:');
-      print('Boxes: ${boxes.length} x ${(boxes.isNotEmpty ? (boxes[0] as List).length : 0)}');
+      print('Boxes: ${boxes.length} x ${(boxes.isNotEmpty ? (boxes[0] as List).length : 0)} x ${(boxes.isNotEmpty && (boxes[0] as List).isNotEmpty ? (boxes[0][0]as List).length : 0)}');
       print('Classes: ${classes.length} x ${(classes.isNotEmpty ? (classes[0] as List).length : 0)}');
       print('Scores: ${scores.length} x ${(scores.isNotEmpty ? (scores[0] as List).length : 0)}');
       print('NumDetections: ${numDetections.length}');
@@ -383,6 +386,7 @@ List<Object> _prepareInputs(img.Image image) {
         return results;
       }
       
+      // numDetections is List<double> with one element, e.g., [10.0]
       final numDet = (numDetections[0] as double).toInt().clamp(0, _maxDetections);
       print('Number of detections: $numDet');
       
@@ -390,25 +394,36 @@ List<Object> _prepareInputs(img.Image image) {
         return results;
       }
       
-      final boxesBatch = boxes[0] as List;
-      final classesBatch = classes[0] as List;
-      final scoresBatch = scores[0] as List;
+      // scores: List<List<double>> e.g. [[0.9, 0.8, ...]]
+      // classes: List<List<double>> e.g. [[1.0, 0.0, ...]]
+      // boxes: List<List<List<double>>> e.g. [[[0.1,0.2,0.3,0.4], ...]]
+      final scoresBatch = scores[0] as List<double>;
+      final classesBatch = classes[0] as List<double>;
+      final boxesBatch = boxes[0] as List<List<double>>; // This is List<List<double>>
       
-      for (int i = 0; i < numDet && i < boxesBatch.length && i < classesBatch.length && i < scoresBatch.length; i++) {
+      for (int i = 0; i < numDet; i++) { // Iterate up to numDet
         try {
-          final score = scoresBatch[i] as double;
-          final classId = (classesBatch[i] as double).toInt();
+          // Add bounds checks for safety, though numDet should respect this.
+          // However, the model might return inconsistent data.
+          if (i >= scoresBatch.length || i >= classesBatch.length || i >= boxesBatch.length) {
+            print('Warning: Detection index $i is out of bounds for scores/classes/boxes arrays. Skipping.');
+            continue;
+          }
+
+          final score = scoresBatch[i];
+          final classId = classesBatch[i].toInt();
           
           print('Detection $i: score=$score, classId=$classId');
           
           if (score > _confidenceThreshold && classId >= 0 && classId < _labels.length) {
-            final box = boxesBatch[i] as List;
+            final box = boxesBatch[i]; // This is List<double>
             
             if (box.length >= 4) {
-              double y1 = (box[0] as double).clamp(0.0, 1.0);
-              double x1 = (box[1] as double).clamp(0.0, 1.0);
-              double y2 = (box[2] as double).clamp(0.0, 1.0);
-              double x2 = (box[3] as double).clamp(0.0, 1.0);
+              // Model output: ymin, xmin, ymax, xmax
+              double y1 = box[0].clamp(0.0, 1.0);
+              double x1 = box[1].clamp(0.0, 1.0);
+              double y2 = box[2].clamp(0.0, 1.0);
+              double x2 = box[3].clamp(0.0, 1.0);
               
               // Convert to pixel coordinates
               final left = (x1 * imageWidth).clamp(0.0, imageWidth.toDouble());
@@ -437,6 +452,8 @@ List<Object> _prepareInputs(img.Image image) {
                 
                 print('Added detection: $formattedLabel (${(score * 100).toStringAsFixed(1)}%)');
               }
+            } else {
+              print('Warning: Box data for detection $i has length ${box.length}, expected >= 4.');
             }
           }
         } catch (e) {
