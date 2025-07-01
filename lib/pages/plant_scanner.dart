@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart'; // Added for compute
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart'; // Added for saving image
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 // Helper class for passing data to the isolate
@@ -131,6 +132,7 @@ class _PlantScannerState extends State<PlantScanner> {
   bool _isDetecting = false;
   bool _isModelLoaded = false;
   List<DetectionResult> _detections = [];
+  bool _debugImageSaved = false; // Flag to save image only once
   
   // Untuk mengontrol FPS detection
   DateTime _lastDetection = DateTime.now();
@@ -220,6 +222,7 @@ class _PlantScannerState extends State<PlantScanner> {
             .toList();
         
         print('Labels berhasil dimuat: ${_labels.length} labels');
+        print('Loaded labels list: $_labels'); // DEBUG: Log the loaded labels
         
         setState(() {
           _isModelLoaded = true;
@@ -307,6 +310,44 @@ class _PlantScannerState extends State<PlantScanner> {
       // Resize image untuk model object detection
       final resizedImage = img.copyResize(image, width: _inputSize, height: _inputSize);
 
+      // DEBUG: Log details of resizedImage before attempting to save
+      print('Debug: resizedImage properties before save attempt:');
+      print('  width: ${resizedImage.width}, height: ${resizedImage.height}');
+      print('  numChannels: ${resizedImage.numChannels}');
+      print('  format: ${resizedImage.format}'); // This will print the enum value, e.g., Format.uint8
+      print('  isValid: ${resizedImage.isValid}');
+      print('  isEmpty: ${resizedImage.isEmpty}');
+
+      if (!_debugImageSaved) {
+        Uint8List? pngBytes; // Declare here to be accessible in catch if needed
+        try {
+          print('Debug: Attempting to encode PNG...');
+          pngBytes = img.encodePng(resizedImage);
+          // If encodePng fails, the next line won't be reached.
+          print('Debug: PNG encoded byte length: ${pngBytes.length}');
+
+          if (pngBytes.isEmpty) {
+            print('Error: Encoded PNG bytes are empty! Not saving.');
+          } else {
+            final Directory tempDir = await getTemporaryDirectory();
+            final String tempPath = tempDir.path;
+            final File imageFile = File('$tempPath/debug_resized_image.png');
+            print('Debug: Attempting to write ${pngBytes.length} bytes to ${imageFile.path}');
+            await imageFile.writeAsBytes(pngBytes);
+            print('Debug: Image file written successfully to: ${imageFile.path}');
+            _debugImageSaved = true; // Set flag only after successful write of non-empty bytes
+          }
+        } catch (e, s) {
+          print('Error during PNG encoding or file saving: $e');
+          print('Stack trace for encoding/saving error: $s');
+          if (pngBytes == null) {
+            print('Debug: pngBytes is null, encoding likely failed catastrophically or threw an exception during/before assignment.');
+          } else {
+            print('Debug: pngBytes was not null but an error occurred. Length at time of error: ${pngBytes.length}');
+          }
+        }
+      }
+
       // Fill the pre-allocated input tensor
       _fillInputTensor(resizedImage);
 
@@ -352,28 +393,50 @@ class _PlantScannerState extends State<PlantScanner> {
     try {
       final width = cameraImage.width;
       final height = cameraImage.height;
-      
+
       final yBuffer = cameraImage.planes[0].bytes;
       final uBuffer = cameraImage.planes[1].bytes;
       final vBuffer = cameraImage.planes[2].bytes;
+      
+      final int yRowStride = cameraImage.planes[0].bytesPerRow;
+      final int uvRowStride = cameraImage.planes[1].bytesPerRow; // Assuming U and V planes have same stride
+      final int uvPixelStride = cameraImage.planes[1].bytesPerPixel ?? 1; // Handle null with a default
 
       final image = img.Image(width: width, height: height);
 
       for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
-          final yIndex = y * width + x;
-          final uvIndex = (y ~/ 2) * (width ~/ 2) + (x ~/ 2);
+          final int yIndex = y * yRowStride + x;
+          
+          // Calculate UV indices based on their strides and pixel strides
+          // Subsampling for U and V is typically 2x2
+          final int uvx = x ~/ 2;
+          final int uvy = y ~/ 2;
+          final int uIndex = uvy * uvRowStride + uvx * uvPixelStride;
+          // V plane might have different strides/layout in some formats,
+          // but for YUV420 typically U and V are similar or interleaved.
+          // Here we assume V has the same stride and pixel stride as U.
+          // If cameraImage.planes[2] has different strides, this would need adjustment.
+          final int vIndex = uvy * uvRowStride + uvx * uvPixelStride; // Using uvRowStride from plane 1 for V as well
 
-          if (yIndex < yBuffer.length && uvIndex < uBuffer.length && uvIndex < vBuffer.length) {
+          if (yIndex < yBuffer.length && uIndex < uBuffer.length && vIndex < vBuffer.length) {
             final yValue = yBuffer[yIndex];
-            final uValue = uBuffer[uvIndex];
-            final vValue = vBuffer[uvIndex];
+            final uValue = uBuffer[uIndex];
+            final vValue = vBuffer[vIndex]; // Corrected to use vBuffer with vIndex
 
-            final r = (yValue + 1.402 * (vValue - 128)).round().clamp(0, 255);
-            final g = (yValue - 0.344136 * (uValue - 128) - 0.714136 * (vValue - 128)).round().clamp(0, 255);
-            final b = (yValue + 1.772 * (uValue - 128)).round().clamp(0, 255);
+            // ITU-R BT.601 YUV to RGB conversion
+            final double yVal = yValue.toDouble();
+            final double uVal = uValue.toDouble() - 128.0;
+            final double vVal = vValue.toDouble() - 128.0;
 
+            final int r = (yVal + 1.402 * vVal).round().clamp(0, 255);
+            final int g = (yVal - 0.344136 * uVal - 0.714136 * vVal).round().clamp(0, 255);
+            final int b = (yVal + 1.772 * uVal).round().clamp(0, 255);
+            
             image.setPixelRgba(x, y, r, g, b, 255);
+          } else {
+            // If out of bounds, set to black or handle as an error
+            image.setPixelRgba(x, y, 0, 0, 0, 255);
           }
         }
       }
@@ -464,7 +527,7 @@ void _fillInputTensor(img.Image image) {
     try {
       print('Processing outputs...');
       print('Available output keys: ${outputs.keys.toList()}');
-      
+
       // Safely extract outputs
       if (!outputs.containsKey(0) || !outputs.containsKey(1) || 
           !outputs.containsKey(2) || !outputs.containsKey(3)) {
@@ -477,6 +540,13 @@ void _fillInputTensor(img.Image image) {
       final boxes = outputs[1] as List;
       final numDetections = outputs[2] as List;
       final classes = outputs[3] as List;
+
+      // DEBUG: Log raw model outputs
+      print('Raw Model Outputs:');
+      print('  Scores: $scores');
+      print('  Boxes: $boxes');
+      print('  NumDetections: $numDetections');
+      print('  Classes: $classes');
       
       print('Output shapes:');
       print('Boxes: ${boxes.length} x ${(boxes.isNotEmpty ? (boxes[0] as List).length : 0)} x ${(boxes.isNotEmpty && (boxes[0] as List).isNotEmpty ? (boxes[0][0]as List).length : 0)}');
@@ -516,9 +586,14 @@ void _fillInputTensor(img.Image image) {
           final score = scoresBatch[i];
           final classId = classesBatch[i].toInt();
           
-          print('Detection $i: score=$score, classId=$classId');
+          // DEBUG: Log ALL raw detections from model output (before confidence check)
+          String rawLabel = classId >= 0 && classId < _labels.length ? _labels[classId] : "OutOfRange";
+          print('Raw Model Detection $i: classId=$classId ($rawLabel), score=$score');
           
           if (score > _confidenceThreshold && classId >= 0 && classId < _labels.length) {
+            // DEBUG: Log classId and the label that will be used (already added)
+            print('Selected label for classId $classId: ${_labels[classId]}');
+
             final box = boxesBatch[i]; // This is List<double>
             
             if (box.length >= 4) {
