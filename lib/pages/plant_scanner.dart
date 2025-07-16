@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math' as math;
+import 'dart:convert';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart'; // Added for compute
 import 'package:flutter/material.dart';
@@ -30,6 +31,9 @@ Future<List<List<List<List<double>>>>> _processImageInIsolate(IsolateData isolat
   }
 
   final resizedImage = img.copyResize(image, width: inputSize, height: inputSize);
+
+  img.adjustColor(resizedImage, brightness: 0.1, contrast: 1.2);
+
   
   var imageInput = List.generate(
     1,
@@ -123,6 +127,8 @@ class _PlantScannerState extends State<PlantScanner> {
 
   Interpreter? _interpreter;
   List<String> _labels = [];
+  Map<String, dynamic> _plantDescriptions = {};
+  bool _isBottomSheetShown = false;
   
   // Pre-allocated input and output tensors
   List<Object>? _inputTensors;
@@ -139,7 +145,7 @@ class _PlantScannerState extends State<PlantScanner> {
   // Model configuration berdasarkan attributes
   static const int _inputSize = 320; // Ukuran input untuk object detection
   static const int _maxDetections = 10;
-  static const double _confidenceThreshold = 0.5;
+  static const double _confidenceThreshold = 0.3; //sebelumnya 0.5
   static const double _iouThreshold = 0.6;
   static const int _numClasses = 10;
 
@@ -220,6 +226,20 @@ class _PlantScannerState extends State<PlantScanner> {
             .toList();
         
         print('Labels berhasil dimuat: ${_labels.length} labels');
+
+        // Load plant descriptions
+        try {
+          final descriptionsData = await rootBundle.loadString('assets/plant_descriptions.json');
+          _plantDescriptions = json.decode(descriptionsData);
+          print('Plant descriptions berhasil dimuat: ${_plantDescriptions.length} descriptions');
+          
+          // Debug: Print all loaded keys
+          print('Loaded JSON keys: ${_plantDescriptions.keys.toList()}');
+          
+        } catch (e) {
+          print('Error memuat plant descriptions: $e');
+          _plantDescriptions = {};
+        }
         
         setState(() {
           _isModelLoaded = true;
@@ -306,6 +326,8 @@ class _PlantScannerState extends State<PlantScanner> {
 
       // Resize image untuk model object detection
       final resizedImage = img.copyResize(image, width: _inputSize, height: _inputSize);
+      // Tambahkan peningkatan brightness/contrast
+      // img.adjustColor(resizedImage, brightness: 0.1, contrast: 1.2);
 
       // Fill the pre-allocated input tensor
       _fillInputTensor(resizedImage);
@@ -339,6 +361,11 @@ class _PlantScannerState extends State<PlantScanner> {
         setState(() {
           _detections = detections;
         });
+
+        // Show bottom sheet if plant is detected and not already shown
+        if (detections.isNotEmpty && !_isBottomSheetShown) {
+          _showPlantInfoBottomSheet(detections.first);
+        }
       }
     } catch (e) {
       print("Error processing camera image: $e");
@@ -516,7 +543,8 @@ void _fillInputTensor(img.Image image) {
           final score = scoresBatch[i];
           final classId = classesBatch[i].toInt();
           
-          print('Detection $i: score=$score, classId=$classId');
+          final label = classId < _labels.length ? _labels[classId] : 'Unknown';
+          print('Deteksi $i: label=$label, score=$score');
           
           if (score > _confidenceThreshold && classId >= 0 && classId < _labels.length) {
             final box = boxesBatch[i]; // This is List<double>
@@ -704,21 +732,39 @@ void _fillInputTensor(img.Image image) {
                 Positioned(
                   top: 100,
                   left: 20,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.7),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      // Display the name of the highest confidence detection
-                      _detections.isNotEmpty
-                          ? '${_detections[0].label} terdeteksi'
-                          : '${_detections.length} tanaman terdeteksi', // Fallback, though covered by outer if
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
+                  child: GestureDetector(
+                    onTap: () {
+                      if (_detections.isNotEmpty) {
+                        _showPlantInfoBottomSheet(_detections.first);
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.7),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            // Display the name of the highest confidence detection
+                            _detections.isNotEmpty
+                                ? '${_detections[0].label} terdeteksi'
+                                : '${_detections.length} tanaman terdeteksi', // Fallback, though covered by outer if
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ]
                       ),
                     ),
                   ),
@@ -764,6 +810,283 @@ void _fillInputTensor(img.Image image) {
             ],
           );
         },
+      ),
+    );
+  }
+
+  void _showPlantInfoBottomSheet(DetectionResult detection) {
+    _isBottomSheetShown = true;
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _buildPlantInfoBottomSheet(detection),
+    ).then((_) {
+      // Reset when bottom sheet is closed
+      _isBottomSheetShown = false;
+    });
+  }
+
+  Map<String, dynamic>? _getPlantDescription(String plantLabel) {
+    // Convert formatted label back to key format
+    final key = plantLabel.toLowerCase().replaceAll(' ', '_');
+    
+    // // Debug logging
+    // print('=== DEBUG PLANT DESCRIPTION ===');
+    // print('Original label: $plantLabel');
+    // print('Converted key: $key');
+    // print('Available keys in JSON: ${_plantDescriptions.keys.toList()}');
+    // print('JSON contains key "$key": ${_plantDescriptions.containsKey(key)}');
+    // print('JSON data for key: ${_plantDescriptions[key]}');
+    // print('================================');
+    
+    return _plantDescriptions[key];
+  }
+
+  Widget _buildPlantInfoBottomSheet(DetectionResult detection) {
+    final plantInfo = _getPlantDescription(detection.label);
+    
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.7,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+        ),
+      ),
+      child: Column(
+        children: [
+          // Handle bar
+          Container(
+            margin: const EdgeInsets.only(top: 8),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey[300],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          
+          // Header
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.local_florist,
+                    color: Colors.green,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        plantInfo?['name'] ?? detection.label,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      if (plantInfo?['english_name'] != null)
+                        Text(
+                          plantInfo!['english_name'],
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      if (plantInfo?['scientific_name'] != null)
+                        Text(
+                          plantInfo!['scientific_name'],
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      Text(
+                        'Confidence: ${(detection.confidence * 100).toStringAsFixed(1)}%',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+          ),
+          
+          // Content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Description
+                  if (plantInfo?['description'] != null) ...[
+                    const Text(
+                      'Deskripsi',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      plantInfo!['description'],
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                  
+                  // Benefits
+                  if (plantInfo?['benefits'] != null) ...[
+                    const Text(
+                      'Manfaat',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ...((plantInfo!['benefits'] as List).map((benefit) =>
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              margin: const EdgeInsets.only(top: 8, right: 8),
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                benefit,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ).toList()),
+                    const SizedBox(height: 20),
+                  ],
+                  
+                  // Usage
+                  if (plantInfo?['usage'] != null) ...[
+                    const Text(
+                      'Cara Penggunaan',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      plantInfo!['usage'],
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.black87,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                  
+                  // If no description available
+                  if (plantInfo == null) ...[
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.info_outline,
+                            color: Colors.grey[600],
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              'Deskripsi untuk tanaman ${detection.label} belum tersedia.',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey[600],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          
+          // Bottom action
+          Container(
+            padding: const EdgeInsets.all(20),
+            child: SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: const Text(
+                  'Tutup',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

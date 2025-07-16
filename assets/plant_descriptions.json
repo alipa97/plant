@@ -1,0 +1,132 @@
+{
+  "bawang_putih": {
+    "name": "Bawang Putih",
+    "english_name": "Garlic",
+    "scientific_name": "Allium sativum",
+    "description": "Tanaman herbal yang memiliki khasiat sebagai antibiotik alami, menurunkan kolesterol, dan meningkatkan sistem imun tubuh.",
+    "benefits": [
+      "Antibiotik alami",
+      "Menurunkan kolesterol",
+      "Meningkatkan imunitas",
+      "Anti-inflamasi"
+    ],
+    "usage": "Dapat dikonsumsi langsung, dibuat jus, atau dicampurkan dalam masakan."
+  },
+  "daun_katuk": {
+    "name": "Daun Katuk",
+    "english_name": "Star Gooseberry Leaves",
+    "scientific_name": "Sauropus androgynus",
+    "description": "Tanaman sayuran hijau yang kaya akan vitamin A, protein, dan zat besi. Sangat baik untuk ibu menyusui karena dapat meningkatkan produksi ASI.",
+    "benefits": [
+      "Meningkatkan produksi ASI",
+      "Kaya vitamin A",
+      "Sumber protein nabati",
+      "Mencegah anemia"
+    ],
+    "usage": "Daun muda dapat direbus sebagai sayur atau dibuat jus."
+  },
+  "daun_sirih": {
+    "name": "Daun Sirih",
+    "english_name": "Betel Leaf",
+    "scientific_name": "Piper betle",
+    "description": "Tanaman merambat yang memiliki sifat antiseptik dan antibakteri. Tradisional digunakan untuk menjaga kesehatan mulut dan mengobati luka.",
+    "benefits": [
+      "Antiseptik alami",
+      "Menjaga kesehatan mulut",
+      "Mengobati luka ringan",
+      "Anti-bakteri"
+    ],
+    "usage": "Dapat direbus untuk berkumur atau ditempelkan pada luka sebagai obat luar."
+  },
+  "jahe": {
+    "name": "Jahe",
+    "english_name": "Ginger",
+    "scientific_name": "Zingiber officinale",
+    "description": "Rimpang dengan rasa pedas dan hangat yang berkhasiat untuk menghangatkan tubuh, mengatasi mual, dan meningkatkan pencernaan.",
+    "benefits": [
+      "Menghangatkan tubuh",
+      "Mengatasi mual",
+      "Meningkatkan pencernaan",
+      "Anti-inflamasi"
+    ],
+    "usage": "Dapat dibuat wedang jahe, ditambahkan dalam masakan, atau dikonsumsi langsung."
+  },
+  "kencur": {
+    "name": "Kencur",
+    "english_name": "Aromatic Ginger",
+    "scientific_name": "Kaempferia galanga",
+    "description": "Rimpang aromatik yang berkhasiat untuk mengatasi batuk, masuk angin, dan meningkatkan nafsu makan. Sering digunakan dalam jamu tradisional.",
+    "benefits": [
+      "Mengatasi batuk",
+      "Mengobati masuk angin",
+      "Meningkatkan nafsu makan",
+      "Meredakan perut kembung"
+    ],
+    "usage": "Dapat dibuat jamu beras kencur, ditumbuk untuk obat luar, atau direbus sebagai minuman."
+  },
+  "kunyit": {
+    "name": "Kunyit",
+    "english_name": "Turmeric",
+    "scientific_name": "Curcuma longa",
+    "description": "Rimpang berwarna kuning dengan kandungan kurkumin yang tinggi. Berkhasiat sebagai anti-inflamasi, antioksidan, dan membantu penyembuhan luka.",
+    "benefits": [
+      "Anti-inflamasi kuat",
+      "Antioksidan tinggi",
+      "Mempercepat penyembuhan luka",
+      "Menjaga kesehatan liver"
+    ],
+    "usage": "Dapat dibuat jamu kunyit asam, ditambahkan dalam masakan, atau diolah menjadi pasta untuk obat luar."
+  },
+  "lemon": {
+    "name": "Lemon",
+    "english_name": "Lemon",
+    "scientific_name": "Citrus limon",
+    "description": "Buah sitrus yang kaya vitamin C dan antioksidan. Berkhasiat untuk meningkatkan imunitas, detoksifikasi, dan menjaga kesehatan kulit.",
+    "benefits": [
+      "Tinggi vitamin C",
+      "Meningkatkan imunitas",
+      "Detoksifikasi alami",
+      "Menjaga kesehatan kulit"
+    ],
+    "usage": "Dapat dibuat infused water, diminum sebagai jus, atau ditambahkan dalam teh."
+  },
+  "lengkuas": {
+    "name": "Lengkuas",
+    "english_name": "Galangal",
+    "scientific_name": "Alpinia galanga",
+    "description": "Rimpang dengan aroma khas yang berkhasiat untuk mengatasi masalah pencernaan, rematik, dan sebagai bumbu masakan tradisional.",
+    "benefits": [
+      "Melancarkan pencernaan",
+      "Mengatasi rematik",
+      "Anti-bakteri",
+      "Menghangatkan tubuh"
+    ],
+    "usage": "Umumnya digunakan sebagai bumbu masakan, dapat juga direbus untuk minuman herbal."
+  },
+  "lidah_buaya": {
+    "name": "Lidah Buaya",
+    "english_name": "Aloe Vera",
+    "scientific_name": "Aloe vera",
+    "description": "Tanaman sukulen dengan gel yang berkhasiat untuk perawatan kulit, mengobati luka bakar, dan menjaga kesehatan rambut.",
+    "benefits": [
+      "Menyembuhkan luka bakar",
+      "Melembabkan kulit",
+      "Menyehatkan rambut",
+      "Anti-inflamasi"
+    ],
+    "usage": "Gel dapat dioleskan langsung pada kulit atau diminum sebagai jus (bagian dalam daun)."
+  },
+  "serai": {
+    "name": "Serai",
+    "english_name": "Lemongrass",
+    "scientific_name": "Cymbopogon citratus",
+    "description": "Rumput aromatik dengan aroma citrus yang berkhasiat untuk meredakan demam, nyeri otot, dan sebagai relaksan alami.",
+    "benefits": [
+      "Meredakan demam",
+      "Mengatasi nyeri otot",
+      "Relaksan alami",
+      "Anti-bakteri"
+    ],
+    "usage": "Dapat direbus sebagai teh, ditambahkan dalam masakan, atau digunakan untuk aromaterapi."
+  }
+}
